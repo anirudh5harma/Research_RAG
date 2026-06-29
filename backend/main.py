@@ -1,13 +1,15 @@
 import uuid
 import time
+import json
 import logging
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
-from config.settings import APP_NAME, APP_VERSION, FRONTEND_URL
+from config.settings import APP_NAME, APP_VERSION, FRONTEND_URL, AI_MODEL, LLM_TEMPERATURE
 from core.pdf_processor import get_pdf_documents, get_text_chunks_from_documents
 from core.image_processor import describe_images
 from core.vector_store import get_qdrant_vectorstore
@@ -15,6 +17,7 @@ from core.rag_chain import get_context_retriever_chain, get_conversational_rag_c
 from utils.helpers import generate_collection_name
 
 from langchain_core.messages import AIMessage, HumanMessage
+from langchain_openai import ChatOpenAI
 
 logger = logging.getLogger(__name__)
 
@@ -62,6 +65,10 @@ app.add_middleware(
 class ChatRequest(BaseModel):
     session_id: str
     query: str
+
+
+class SuggestRequest(BaseModel):
+    session_id: str
 
 
 class ChatResponse(BaseModel):
@@ -189,6 +196,105 @@ async def chat(req: ChatRequest):
     except Exception as e:
         logger.error("Chat error: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/chat/stream")
+async def chat_stream(req: ChatRequest):
+    session = sessions.get(req.session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found. Upload documents first.")
+
+    if not session["rag_chain"]:
+        raise HTTPException(status_code=400, detail="RAG chain not initialized")
+
+    if not req.query.strip():
+        raise HTTPException(status_code=400, detail="Empty query")
+
+    def event_generator():
+        try:
+            full_answer = ""
+            context_docs = []
+
+            for chunk in session["rag_chain"].stream({
+                "chat_history": session["chat_history"],
+                "input": req.query,
+            }):
+                if "context" in chunk:
+                    context_docs = chunk["context"]
+                if "answer" in chunk:
+                    token = chunk["answer"]
+                    full_answer += token
+                    yield f"event: token\ndata: {json.dumps({'token': token})}\n\n"
+
+            session["chat_history"].append(HumanMessage(content=req.query))
+            session["chat_history"].append(AIMessage(content=full_answer))
+
+            sources = []
+            images = []
+            image_cache = session.get("image_cache", {})
+
+            for doc in context_docs:
+                source_info = {
+                    "source": doc.metadata.get("source", "unknown"),
+                    "page": doc.metadata.get("page", 0),
+                    "content_type": doc.metadata.get("content_type", "text"),
+                }
+                sources.append(source_info)
+
+                if doc.metadata.get("content_type") == "image":
+                    cache_key = doc.metadata.get("image_cache_key")
+                    if cache_key and cache_key in image_cache:
+                        cached = image_cache[cache_key]
+                        images.append({
+                            "base64": cached["base64"],
+                            "ext": cached["ext"],
+                            "source": doc.metadata.get("source", "unknown"),
+                            "page": doc.metadata.get("page", 0),
+                            "caption": doc.page_content,
+                        })
+
+            yield f"event: sources\ndata: {json.dumps({'sources': sources, 'images': images})}\n\n"
+            yield f"event: done\ndata: {json.dumps({'status': 'complete'})}\n\n"
+
+        except Exception as e:
+            logger.error("Stream error: %s", e)
+            yield f"event: error\ndata: {json.dumps({'detail': str(e)})}\n\n"
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@app.post("/api/suggest-questions")
+async def suggest_questions(req: SuggestRequest):
+    session = sessions.get(req.session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    try:
+        retriever = session["vectorstore"].as_retriever(search_kwargs={"k": 3})
+        sample_docs = retriever.invoke("key findings methodology results")
+        context_sample = "\n\n".join([d.page_content[:500] for d in sample_docs[:3]])
+
+        llm = ChatOpenAI(model=AI_MODEL, temperature=0.7)
+        response = llm.invoke(
+            f"Based on these research paper excerpts, generate exactly 4 short questions "
+            f"(max 10 words each) that a researcher would want to ask. "
+            f"Return ONLY a JSON array of strings, no other text.\n\n{context_sample}"
+        )
+
+        questions = json.loads(response.content)
+        return {"questions": questions[:4]}
+    except Exception as e:
+        logger.error("Suggest questions error: %s", e)
+        return {"questions": [
+            "What are the key findings?",
+            "What methodology was used?",
+            "What are the main conclusions?",
+            "How does this compare to prior work?",
+        ]}
 
 
 @app.delete("/api/session/{session_id}")

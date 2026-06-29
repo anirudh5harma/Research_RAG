@@ -58,6 +58,88 @@ export async function sendMessage(
   return res.json();
 }
 
+export interface StreamCallbacks {
+  onToken: (token: string) => void;
+  onSources: (sources: ChatResponse["sources"], images: ChatResponse["images"]) => void;
+  onDone: () => void;
+  onError: (error: string) => void;
+}
+
+export async function sendMessageStream(
+  sessionId: string,
+  query: string,
+  callbacks: StreamCallbacks
+): Promise<void> {
+  const res = await fetch(`${API_URL}/api/chat/stream`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ session_id: sessionId, query }),
+  });
+
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: res.statusText }));
+    callbacks.onError(err.detail || "Chat failed");
+    return;
+  }
+
+  const reader = res.body?.getReader();
+  if (!reader) {
+    callbacks.onError("No response body");
+    return;
+  }
+
+  const decoder = new TextDecoder();
+  let buffer = "";
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split("\n");
+    buffer = lines.pop() || "";
+
+    let eventType = "";
+    for (const line of lines) {
+      if (line.startsWith("event: ")) {
+        eventType = line.slice(7).trim();
+      } else if (line.startsWith("data: ")) {
+        const data = JSON.parse(line.slice(6));
+        switch (eventType) {
+          case "token":
+            callbacks.onToken(data.token);
+            break;
+          case "sources":
+            callbacks.onSources(data.sources, data.images);
+            break;
+          case "done":
+            callbacks.onDone();
+            break;
+          case "error":
+            callbacks.onError(data.detail);
+            break;
+        }
+        eventType = "";
+      }
+    }
+  }
+}
+
+export async function suggestQuestions(sessionId: string): Promise<string[]> {
+  try {
+    const res = await fetch(`${API_URL}/api/suggest-questions`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ session_id: sessionId }),
+    });
+    if (!res.ok) return [];
+    const data = await res.json();
+    return data.questions || [];
+  } catch {
+    return [];
+  }
+}
+
 export async function deleteSession(sessionId: string): Promise<void> {
   await fetch(`${API_URL}/api/session/${sessionId}`, { method: "DELETE" });
 }
