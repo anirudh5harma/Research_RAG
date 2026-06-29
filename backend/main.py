@@ -4,7 +4,7 @@ import json
 import logging
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, UploadFile, File, HTTPException, Request
+from fastapi import FastAPI, UploadFile, File, HTTPException, Request, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.responses import StreamingResponse
@@ -26,6 +26,7 @@ SESSION_TTL = 3600 * 4
 MAX_UPLOAD_SIZE = 50 * 1024 * 1024
 
 sessions: dict = {}
+upload_jobs: dict = {}
 
 
 def _normalise_origin(origin: str) -> str:
@@ -60,12 +61,99 @@ def _cleanup_expired_sessions():
         logger.info("Cleaned up %d expired sessions", len(expired))
 
 
+def _cleanup_expired_jobs():
+    now = time.time()
+    expired = [k for k, v in upload_jobs.items() if now - v.get("created_at", 0) > SESSION_TTL]
+    for k in expired:
+        del upload_jobs[k]
+    if expired:
+        logger.info("Cleaned up %d expired upload jobs", len(expired))
+
+
+def _set_upload_job(job_id: str, **updates):
+    upload_jobs.setdefault(job_id, {"job_id": job_id, "created_at": time.time()})
+    upload_jobs[job_id].update(updates)
+    upload_jobs[job_id]["updated_at"] = time.time()
+
+
+def _process_upload_job(job_id: str, pdf_files: list[tuple[str, bytes]]):
+    started_at = time.time()
+    try:
+        _set_upload_job(
+            job_id,
+            status="extracting",
+            message="Extracting text, tables, and images from PDFs...",
+        )
+        docs = get_pdf_documents(pdf_files)
+        if not docs:
+            raise HTTPException(status_code=422, detail="No content extracted from PDFs")
+
+        _set_upload_job(
+            job_id,
+            status="describing_images",
+            message="Describing figures and enriching document content...",
+        )
+        docs = describe_images(docs)
+
+        _set_upload_job(
+            job_id,
+            status="indexing",
+            message="Building the vector index for retrieval...",
+        )
+        chunked = get_text_chunks_from_documents(docs)
+
+        collection = generate_collection_name()
+        vectorstore, info = get_qdrant_vectorstore(chunked, collection)
+        if vectorstore is None:
+            raise HTTPException(status_code=500, detail="Failed to create vector store")
+
+        session_id = str(uuid.uuid4())
+        retriever = get_context_retriever_chain(vectorstore)
+        rag_chain = get_conversational_rag_chain(retriever)
+
+        sessions[session_id] = {
+            "vectorstore": vectorstore,
+            "rag_chain": rag_chain,
+            "chat_history": [],
+            "image_cache": {k: v for k, v in info.get("images", {}).items()} if isinstance(info.get("images"), dict) else {},
+            "collection": collection,
+            "created_at": time.time(),
+        }
+
+        _set_upload_job(
+            job_id,
+            status="completed",
+            message=f"Processed {len(pdf_files)} PDF(s), indexed {info['indexed']} chunks",
+            session_id=session_id,
+            documents_processed=len(pdf_files),
+            chunks_indexed=info["indexed"],
+        )
+        logger.info("Upload job %s completed in %.2fs", job_id, time.time() - started_at)
+    except HTTPException as exc:
+        _set_upload_job(
+            job_id,
+            status="failed",
+            message=exc.detail,
+            error=exc.detail,
+        )
+        logger.warning("Upload job %s failed: %s", job_id, exc.detail)
+    except Exception as exc:
+        logger.exception("Upload job %s crashed", job_id)
+        _set_upload_job(
+            job_id,
+            status="failed",
+            message="Upload processing failed",
+            error=str(exc),
+        )
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info("%s v%s starting", APP_NAME, APP_VERSION)
     logger.info("CORS allowed origins: %s", allowed_origins)
     yield
     sessions.clear()
+    upload_jobs.clear()
     logger.info("Shutdown — sessions cleared")
 
 
@@ -115,14 +203,31 @@ class UploadResponse(BaseModel):
     message: str
 
 
+class UploadStartResponse(BaseModel):
+    job_id: str
+    status: str
+    message: str
+
+
+class UploadStatusResponse(BaseModel):
+    job_id: str
+    status: str
+    message: str
+    session_id: str | None = None
+    documents_processed: int | None = None
+    chunks_indexed: int | None = None
+    error: str | None = None
+
+
 @app.get("/api/health")
 async def health():
     return {"status": "ok", "app": APP_NAME, "version": APP_VERSION}
 
 
-@app.post("/api/upload", response_model=UploadResponse)
-async def upload_documents(files: list[UploadFile] = File(...)):
+@app.post("/api/upload", response_model=UploadStartResponse, status_code=202)
+async def upload_documents(background_tasks: BackgroundTasks, files: list[UploadFile] = File(...)):
     _cleanup_expired_sessions()
+    _cleanup_expired_jobs()
 
     if not files:
         raise HTTPException(status_code=400, detail="No files provided")
@@ -140,37 +245,38 @@ async def upload_documents(files: list[UploadFile] = File(...)):
             raise HTTPException(status_code=413, detail=f"Total upload exceeds {MAX_UPLOAD_SIZE // 1024 // 1024}MB limit")
         pdf_files.append((f.filename, content))
 
-    docs = get_pdf_documents(pdf_files)
-    if not docs:
-        raise HTTPException(status_code=422, detail="No content extracted from PDFs")
+    job_id = str(uuid.uuid4())
+    _set_upload_job(
+        job_id,
+        status="queued",
+        message=f"Queued {len(pdf_files)} PDF(s) for processing",
+    )
+    background_tasks.add_task(_process_upload_job, job_id, pdf_files)
 
-    docs = describe_images(docs)
-    chunked = get_text_chunks_from_documents(docs)
+    logger.info("Accepted upload job %s with %d PDF(s)", job_id, len(pdf_files))
+    return UploadStartResponse(
+        job_id=job_id,
+        status="queued",
+        message="Upload accepted. Processing in background.",
+    )
 
-    collection = generate_collection_name()
-    vectorstore, info = get_qdrant_vectorstore(chunked, collection)
 
-    if vectorstore is None:
-        raise HTTPException(status_code=500, detail="Failed to create vector store")
+@app.get("/api/upload/{job_id}", response_model=UploadStatusResponse)
+async def get_upload_status(job_id: str):
+    _cleanup_expired_jobs()
 
-    session_id = str(uuid.uuid4())
-    retriever = get_context_retriever_chain(vectorstore)
-    rag_chain = get_conversational_rag_chain(retriever)
+    job = upload_jobs.get(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Upload job not found")
 
-    sessions[session_id] = {
-        "vectorstore": vectorstore,
-        "rag_chain": rag_chain,
-        "chat_history": [],
-        "image_cache": {k: v for k, v in info.get("images", {}).items()} if isinstance(info.get("images"), dict) else {},
-        "collection": collection,
-        "created_at": time.time(),
-    }
-
-    return UploadResponse(
-        session_id=session_id,
-        documents_processed=len(pdf_files),
-        chunks_indexed=info["indexed"],
-        message=f"Processed {len(pdf_files)} PDF(s), indexed {info['indexed']} chunks",
+    return UploadStatusResponse(
+        job_id=job_id,
+        status=job.get("status", "queued"),
+        message=job.get("message", "Processing upload"),
+        session_id=job.get("session_id"),
+        documents_processed=job.get("documents_processed"),
+        chunks_indexed=job.get("chunks_indexed"),
+        error=job.get("error"),
     )
 
 

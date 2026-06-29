@@ -7,6 +7,22 @@ export interface UploadResponse {
   message: string;
 }
 
+interface UploadStartResponse {
+  job_id: string;
+  status: string;
+  message: string;
+}
+
+export interface UploadStatusResponse {
+  job_id: string;
+  status: string;
+  message: string;
+  session_id?: string | null;
+  documents_processed?: number | null;
+  chunks_indexed?: number | null;
+  error?: string | null;
+}
+
 export interface ChatResponse {
   answer: string;
   sources: Array<{
@@ -23,7 +39,12 @@ export interface ChatResponse {
   }>;
 }
 
-export async function uploadDocuments(files: File[]): Promise<UploadResponse> {
+const POLL_INTERVAL_MS = 2000;
+const MAX_UPLOAD_WAIT_MS = 15 * 60 * 1000;
+
+const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+async function startUploadDocuments(files: File[]): Promise<UploadStartResponse> {
   const formData = new FormData();
   files.forEach((file) => formData.append("files", file));
 
@@ -38,6 +59,55 @@ export async function uploadDocuments(files: File[]): Promise<UploadResponse> {
   }
 
   return res.json();
+}
+
+export async function getUploadStatus(jobId: string): Promise<UploadStatusResponse> {
+  const res = await fetch(`${API_URL}/api/upload/${jobId}`);
+
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: res.statusText }));
+    throw new Error(err.detail || "Failed to fetch upload status");
+  }
+
+  return res.json();
+}
+
+export async function uploadDocuments(
+  files: File[],
+  onStatus?: (status: UploadStatusResponse) => void
+): Promise<UploadResponse> {
+  const started = await startUploadDocuments(files);
+  const beganAt = Date.now();
+
+  onStatus?.({
+    job_id: started.job_id,
+    status: started.status,
+    message: started.message,
+  });
+
+  while (Date.now() - beganAt < MAX_UPLOAD_WAIT_MS) {
+    await wait(POLL_INTERVAL_MS);
+    const status = await getUploadStatus(started.job_id);
+    onStatus?.(status);
+
+    if (status.status === "completed") {
+      if (!status.session_id || status.documents_processed == null || status.chunks_indexed == null) {
+        throw new Error("Upload completed without session details");
+      }
+      return {
+        session_id: status.session_id,
+        documents_processed: status.documents_processed,
+        chunks_indexed: status.chunks_indexed,
+        message: status.message,
+      };
+    }
+
+    if (status.status === "failed") {
+      throw new Error(status.error || status.message || "Upload failed");
+    }
+  }
+
+  throw new Error("Upload is taking too long. Please try again.");
 }
 
 export async function sendMessage(

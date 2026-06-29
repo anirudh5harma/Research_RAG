@@ -3,17 +3,33 @@
 import { useState, useEffect } from "react";
 import FileUpload from "@/components/FileUpload";
 import ChatInterface from "@/components/ChatInterface";
-import { uploadDocuments, deleteSession } from "@/lib/api";
+import { uploadDocuments, deleteSession, type UploadStatusResponse } from "@/lib/api";
 
 type ProcessingStep = "idle" | "uploading" | "extracting" | "indexing" | "done";
 
 const STEP_LABELS: Record<ProcessingStep, string> = {
   idle: "",
-  uploading: "Uploading files...",
-  extracting: "Extracting text, tables & images...",
+  uploading: "Uploading and queueing files...",
+  extracting: "Extracting and analyzing paper content...",
   indexing: "Building search index...",
   done: "Ready to chat!",
 };
+
+function mapUploadStatusToStep(status: UploadStatusResponse["status"]): ProcessingStep {
+  switch (status) {
+    case "queued":
+      return "uploading";
+    case "extracting":
+    case "describing_images":
+      return "extracting";
+    case "indexing":
+      return "indexing";
+    case "completed":
+      return "done";
+    default:
+      return "idle";
+  }
+}
 
 export default function Home() {
   const [sessionId, setSessionId] = useState<string | null>(null);
@@ -43,11 +59,12 @@ export default function Home() {
 
     try {
       setProcessingStep("uploading");
-      await new Promise((r) => setTimeout(r, 300));
-      setProcessingStep("extracting");
-      const response = await uploadDocuments(files);
-      setProcessingStep("indexing");
-      await new Promise((r) => setTimeout(r, 400));
+      const response = await uploadDocuments(files, (status) => {
+        const nextStep = mapUploadStatusToStep(status.status);
+        if (nextStep !== "idle") {
+          setProcessingStep(nextStep);
+        }
+      });
       setProcessingStep("done");
       setSessionId(response.session_id);
       setUploadInfo(response.message);
