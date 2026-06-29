@@ -114,8 +114,37 @@ export default function MessageBubble({ message, isStreaming }: MessageProps) {
             {message.content}
           </div>
         ) : (
-          <div className="text-[14px] leading-relaxed prose prose-sm dark:prose-invert max-w-none prose-p:my-2 prose-headings:mt-4 prose-headings:mb-2 prose-headings:font-semibold prose-table:text-xs prose-th:px-3 prose-th:py-1.5 prose-td:px-3 prose-td:py-1.5 prose-th:bg-zinc-50 dark:prose-th:bg-zinc-900 prose-th:font-medium prose-table:border prose-table:border-zinc-200 dark:prose-table:border-zinc-800 prose-table:rounded-xl prose-table:overflow-hidden prose-code:text-xs prose-code:bg-zinc-100 dark:prose-code:bg-zinc-800 prose-code:px-1.5 prose-code:py-0.5 prose-code:rounded-md prose-code:font-normal prose-pre:bg-zinc-900 prose-pre:rounded-xl prose-a:text-indigo-600 dark:prose-a:text-indigo-400 prose-a:no-underline hover:prose-a:underline prose-strong:text-zinc-900 dark:prose-strong:text-zinc-100">
-            <ReactMarkdown remarkPlugins={[remarkGfm]}>
+          <div className="text-[14px] leading-relaxed prose prose-sm dark:prose-invert max-w-none prose-p:my-2 prose-headings:mt-4 prose-headings:mb-2 prose-headings:font-semibold prose-code:text-xs prose-code:bg-zinc-100 dark:prose-code:bg-zinc-800 prose-code:px-1.5 prose-code:py-0.5 prose-code:rounded-md prose-code:font-normal prose-pre:bg-zinc-900 prose-pre:rounded-xl prose-a:text-indigo-600 dark:prose-a:text-indigo-400 prose-a:no-underline hover:prose-a:underline prose-strong:text-zinc-900 dark:prose-strong:text-zinc-100">
+            <ReactMarkdown
+              remarkPlugins={[remarkGfm]}
+              components={{
+                table: ({ children }) => (
+                  <div className="overflow-x-auto my-3 rounded-xl border border-zinc-200 dark:border-zinc-800">
+                    <table className="min-w-full text-xs border-collapse">
+                      {children}
+                    </table>
+                  </div>
+                ),
+                thead: ({ children }) => (
+                  <thead className="bg-zinc-50 dark:bg-zinc-900">{children}</thead>
+                ),
+                th: ({ children }) => (
+                  <th className="px-3 py-2 text-left font-medium text-zinc-700 dark:text-zinc-300 border-b border-zinc-200 dark:border-zinc-800 whitespace-nowrap">
+                    {children}
+                  </th>
+                ),
+                td: ({ children }) => (
+                  <td className="px-3 py-2 text-zinc-600 dark:text-zinc-400 border-b border-zinc-100 dark:border-zinc-800/50">
+                    {children}
+                  </td>
+                ),
+                tr: ({ children }) => (
+                  <tr className="hover:bg-zinc-50 dark:hover:bg-zinc-900/50 transition-colors">
+                    {children}
+                  </tr>
+                ),
+              }}
+            >
               {message.content}
             </ReactMarkdown>
             {isStreaming && (

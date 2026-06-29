@@ -102,10 +102,11 @@ def _extract_tables(pdf_bytes: bytes, filename: str) -> List[Document]:
             pages_with_tables.add(page_num)
             table_counter += 1
             caption = _find_table_caption(page_text, table_counter)
+            markdown_table = df.to_markdown(index=False)
             content = f"Table {table_counter}"
             if caption:
                 content += f": {caption}"
-            content += f"\n\n{df.to_markdown(index=False)}"
+            content += f"\n\n{_build_table_summary(markdown_table)}\n\n{markdown_table}"
             documents.append(Document(
                 page_content=content,
                 metadata={
@@ -151,10 +152,11 @@ def _extract_tables(pdf_bytes: bytes, filename: str) -> List[Document]:
                     continue
                 table_counter += 1
                 caption = _find_table_caption(page_text, table_counter)
+                markdown_table = df.to_markdown(index=False)
                 content = f"Table {table_counter}"
                 if caption:
                     content += f": {caption}"
-                content += f"\n\n{df.to_markdown(index=False)}"
+                content += f"\n\n{_build_table_summary(markdown_table)}\n\n{markdown_table}"
                 documents.append(Document(
                     page_content=content,
                     metadata={
@@ -182,23 +184,75 @@ def _find_table_caption(page_text: str, table_number: int) -> str:
     return ""
 
 
+def _build_table_summary(markdown_table: str) -> str:
+    lines = [line.strip() for line in markdown_table.splitlines() if line.strip()]
+    if not lines:
+        return "[Table Summary: Table with columns unknown columns across 0 rows]"
+
+    headers = [cell or "unnamed column" for cell in _split_markdown_row(lines[0])]
+    if not headers:
+        headers = ["unknown columns"]
+
+    data_rows = 0
+    for line in lines[1:]:
+        cells = _split_markdown_row(line)
+        if not cells or _is_markdown_separator_row(cells):
+            continue
+        data_rows += 1
+
+    return (
+        f"[Table Summary: Table with columns {', '.join(headers)} "
+        f"across {data_rows} rows]"
+    )
+
+
+def _split_markdown_row(row: str) -> list[str]:
+    return [cell.strip() for cell in row.strip().strip("|").split("|")]
+
+
+def _is_markdown_separator_row(cells: list[str]) -> bool:
+    return bool(cells) and all(re.match(r"^:?-{3,}:?$", cell) for cell in cells if cell)
+
+
 def _looks_like_real_table(table_data: list) -> bool:
     if not table_data or len(table_data) < 3:
         return False
     header = table_data[0]
     if not header or len(header) < 2:
         return False
+    if all(len(row) <= 1 for row in table_data):
+        return False
     if max(len(row) for row in table_data) > 15:
+        return False
+    if len(table_data) > 50:
         return False
     non_empty = [h for h in header if h and str(h).strip()]
     if non_empty and sum(len(str(h)) for h in non_empty) / len(non_empty) > 40:
         return False
+    if non_empty and len(non_empty) >= 4:
+        short_headers = sum(1 for h in non_empty if len(str(h).strip()) <= 3)
+        if short_headers / len(non_empty) > 0.4:
+            return False
     first_col = [str(row[0]).strip() for row in table_data if row and row[0]]
     if sum(1 for v in first_col if re.match(r"^\[\d+\]$", v)) >= 3:
         return False
     words = " ".join(str(c) for row in table_data for c in row if c).split()
     if words and sum(1 for w in words if len(w) <= 1) / len(words) > 0.4:
         return False
+    all_text = " ".join(str(c) for row in table_data for c in row if c)
+    if len(all_text) > 0 and len(table_data) > 10:
+        avg_cell_len = len(all_text) / sum(len(row) for row in table_data if row)
+        if avg_cell_len < 3:
+            return False
+    if non_empty and len(non_empty) >= 5:
+        joined = "".join(str(h).strip() for h in non_empty)
+        spaces_in_headers = sum(1 for h in non_empty if " " in str(h).strip())
+        if spaces_in_headers / len(non_empty) < 0.2 and len(joined) / len(non_empty) < 8:
+            return False
+        concat = " ".join(str(h).strip() for h in non_empty)
+        lowered = sum(1 for h in non_empty if str(h).strip() and str(h).strip()[0].islower())
+        if lowered / len(non_empty) > 0.5 and len(non_empty) >= 6:
+            return False
     return True
 
 
@@ -210,6 +264,12 @@ def _is_noise(df: pd.DataFrame) -> bool:
     if empty / total > 0.7:
         return True
     if sum(len(str(v)) for v in df.values.flatten() if pd.notna(v)) < 30:
+        return True
+    if df.shape[0] > 50:
+        return True
+    col_names = [str(c) for c in df.columns]
+    unnamed_count = sum(1 for c in col_names if c.startswith("Col") or c.startswith("unnamed"))
+    if len(col_names) >= 4 and unnamed_count / len(col_names) > 0.5:
         return True
     return False
 
