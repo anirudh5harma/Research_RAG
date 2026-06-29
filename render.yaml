@@ -1,0 +1,20 @@
+services:
+  - type: web
+    name: research-rag-api
+    runtime: docker
+    dockerfilePath: ./backend/Dockerfile
+    dockerContext: ./backend
+    plan: starter
+    envVars:
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: QDRANT_HOST
+        sync: false
+      - key: QDRANT_API_KEY
+        sync: false
+      - key: AI_MODEL
+        value: gpt-4o-mini
+      - key: IMAGE_DESCRIPTION_MODEL
+        value: gpt-4o
+      - key: FRONTEND_URL
+        sync: false

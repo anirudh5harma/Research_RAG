@@ -1,6 +1,5 @@
-# Environment variables
 .env
-
+.env.local
 .DS_Store
 
 __pycache__/
@@ -15,4 +14,12 @@ env/
 .idea/
 .vscode/
 
-qdrant_storage/ 
+qdrant_storage/
+
+# Frontend
+frontend/node_modules/
+frontend/.next/
+frontend/out/
+
+# Backend
+backend/__pycache__/
