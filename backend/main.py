@@ -391,6 +391,9 @@ async def chat_stream(req: ChatRequest):
 
                 if doc.metadata.get("content_type") == "image":
                     cache_key = doc.metadata.get("image_cache_key")
+                    logger.info("Image doc cache_key=%s, in_cache=%s, cache_keys=%s",
+                                cache_key, cache_key in image_cache if cache_key else False,
+                                list(image_cache.keys())[:5])
                     if cache_key and cache_key in image_cache:
                         cached = image_cache[cache_key]
                         images.append({

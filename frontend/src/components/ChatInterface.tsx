@@ -105,7 +105,13 @@ export default function ChatInterface({ sessionId }: ChatInterfaceProps) {
     const el = textareaRef.current;
     if (!el) return;
     el.style.height = "auto";
-    el.style.height = Math.min(el.scrollHeight, 160) + "px";
+    const lineHeight = 20;
+    const padding = 28;
+    const threeLineHeight = lineHeight * 3 + padding;
+    const maxHeight = 160;
+    const height = Math.min(el.scrollHeight, maxHeight);
+    el.style.height = height + "px";
+    el.style.overflowY = el.scrollHeight > maxHeight ? "auto" : "hidden";
   }, []);
 
   useEffect(() => {
@@ -279,12 +285,12 @@ export default function ChatInterface({ sessionId }: ChatInterfaceProps) {
               }
               disabled={!sessionId || isLoading}
               rows={1}
-              className="w-full resize-none rounded-2xl border border-zinc-200 dark:border-zinc-800 bg-zinc-50 dark:bg-zinc-900 pl-4 pr-12 py-3.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/30 focus:border-indigo-400 dark:focus:border-indigo-500 disabled:opacity-50 transition-all placeholder:text-zinc-400 dark:placeholder:text-zinc-500"
+              className="w-full resize-none overflow-hidden rounded-2xl border border-zinc-200 dark:border-zinc-800 bg-zinc-50 dark:bg-zinc-900 pl-4 pr-12 py-3.5 text-sm leading-5 focus:outline-none focus:ring-2 focus:ring-indigo-500/30 focus:border-indigo-400 dark:focus:border-indigo-500 disabled:opacity-50 transition-all placeholder:text-zinc-400 dark:placeholder:text-zinc-500"
             />
             <button
               type="submit"
               disabled={!sessionId || isLoading || !input.trim()}
-              className="absolute right-2 bottom-2 p-2 bg-indigo-600 hover:bg-indigo-700 disabled:bg-zinc-200 dark:disabled:bg-zinc-800 text-white disabled:text-zinc-400 dark:disabled:text-zinc-600 rounded-xl transition-all disabled:cursor-not-allowed active:scale-95 shadow-sm"
+              className="absolute right-2.5 bottom-2.5 p-2 bg-indigo-600 hover:bg-indigo-700 disabled:bg-zinc-200 dark:disabled:bg-zinc-800 text-white disabled:text-zinc-400 dark:disabled:text-zinc-600 rounded-xl transition-all disabled:cursor-not-allowed active:scale-95 shadow-sm"
             >
               <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                 <path strokeLinecap="round" strokeLinejoin="round" d="M4.5 10.5L12 3m0 0l7.5 7.5M12 3v18" />

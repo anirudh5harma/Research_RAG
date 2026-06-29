@@ -161,11 +161,17 @@ export default function MessageBubble({ message, isStreaming }: MessageProps) {
                 key={i}
                 className="rounded-xl border border-zinc-200 dark:border-zinc-800 overflow-hidden bg-zinc-50 dark:bg-zinc-900"
               >
-                <img
-                  src={`data:image/${img.ext};base64,${img.base64}`}
-                  alt={img.caption}
-                  className="max-w-full max-h-96 object-contain mx-auto"
-                />
+                {img.base64 ? (
+                  <img
+                    src={`data:image/${img.ext};base64,${img.base64}`}
+                    alt={img.caption}
+                    className="max-w-full max-h-96 object-contain mx-auto"
+                  />
+                ) : (
+                  <div className="px-4 py-8 text-center text-sm text-zinc-400 dark:text-zinc-500">
+                    Image could not be loaded
+                  </div>
+                )}
                 <div className="px-3 py-2 border-t border-zinc-200 dark:border-zinc-800 text-[11px] text-zinc-500 flex items-center gap-1.5">
                   <svg className="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
                     <path strokeLinecap="round" strokeLinejoin="round" d="M2.25 15.75l5.159-5.159a2.25 2.25 0 013.182 0l5.159 5.159m-1.5-1.5l1.409-1.409a2.25 2.25 0 013.182 0l2.909 2.909M3.75 21h16.5a1.5 1.5 0 001.5-1.5V5.25a1.5 1.5 0 00-1.5-1.5H3.75a1.5 1.5 0 00-1.5 1.5v14.25a1.5 1.5 0 001.5 1.5z" />
