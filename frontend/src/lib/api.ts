@@ -5,6 +5,7 @@ export interface UploadResponse {
   documents_processed: number;
   chunks_indexed: number;
   message: string;
+  non_research_warnings?: string[];
 }
 
 interface UploadStartResponse {
@@ -21,6 +22,7 @@ export interface UploadStatusResponse {
   documents_processed?: number | null;
   chunks_indexed?: number | null;
   error?: string | null;
+  non_research_warnings?: string[] | null;
 }
 
 export interface ChatResponse {
@@ -149,6 +151,7 @@ export async function uploadDocuments(
         documents_processed: status.documents_processed,
         chunks_indexed: status.chunks_indexed,
         message: status.message,
+        non_research_warnings: status.non_research_warnings || undefined,
       };
     }
 

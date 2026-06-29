@@ -332,6 +332,38 @@ def _find_figure_caption(page_text: str, figure_number: int) -> str:
     return ""
 
 
+_ACADEMIC_MARKERS = [
+    r"\babstract\b",
+    r"\breferences\b",
+    r"\bintroduction\b",
+    r"\bconclusion\b",
+    r"\bbibliography\b",
+    r"\bcitation\b",
+    r"\bdoi\b",
+    r"\barxiv\b",
+    r"\bet\s+al\b",
+    r"\bmethodology\b",
+    r"\bliterature\s+review\b",
+    r"\brelated\s+work\b",
+    r"\backnowledg(?:e)?ments?\b",
+    r"\bpeer[- ]review",
+    r"\bappendix\b",
+]
+
+
+def validate_research_papers(documents: List[Document]) -> List[str]:
+    sources = set(doc.metadata.get("source", "") for doc in documents)
+    warnings = []
+    for source in sources:
+        source_docs = [d for d in documents if d.metadata.get("source") == source]
+        first_pages = [d for d in source_docs if d.metadata.get("page", 999) <= 3]
+        text = " ".join(d.page_content for d in first_pages).lower()
+        hits = sum(1 for pat in _ACADEMIC_MARKERS if re.search(pat, text))
+        if hits < 3:
+            warnings.append(source)
+    return warnings
+
+
 def get_text_chunks_from_documents(documents: List[Document]) -> List[Document]:
     text_splitter = RecursiveCharacterTextSplitter(
         chunk_size=CHUNK_SIZE,

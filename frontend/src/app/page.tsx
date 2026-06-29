@@ -39,6 +39,7 @@ export default function Home() {
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [fileCount, setFileCount] = useState(0);
   const [isDark, setIsDark] = useState(false);
+  const [nonResearchWarnings, setNonResearchWarnings] = useState<string[]>([]);
 
   useEffect(() => {
     setIsDark(document.documentElement.classList.contains("dark"));
@@ -68,6 +69,7 @@ export default function Home() {
       setProcessingStep("done");
       setSessionId(response.session_id);
       setUploadInfo(response.message);
+      setNonResearchWarnings(response.non_research_warnings || []);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Upload failed");
       setProcessingStep("idle");
@@ -82,6 +84,7 @@ export default function Home() {
     setUploadInfo(null);
     setError(null);
     setProcessingStep("idle");
+    setNonResearchWarnings([]);
     setFileCount(0);
   };
 
@@ -195,6 +198,20 @@ export default function Home() {
                 <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
               </svg>
               {uploadInfo}
+            </div>
+          )}
+
+          {nonResearchWarnings.length > 0 && (
+            <div className="p-3 bg-amber-50 dark:bg-amber-950/30 border border-amber-200/60 dark:border-amber-800/30 rounded-xl text-[13px] text-amber-600 dark:text-amber-400 flex items-start gap-2 animate-fade-in">
+              <svg className="h-4 w-4 mt-0.5 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L3.732 16.5c-.77.833.192 2.5 1.732 2.5z" />
+              </svg>
+              <span>
+                {nonResearchWarnings.length === 1
+                  ? `${nonResearchWarnings[0]} may not be a research paper.`
+                  : `${nonResearchWarnings.join(", ")} may not be research papers.`
+                } Results work best with academic papers.
+              </span>
             </div>
           )}
 

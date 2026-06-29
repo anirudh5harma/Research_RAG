@@ -11,7 +11,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from config.settings import APP_NAME, APP_VERSION, FRONTEND_URL, AI_MODEL, LLM_TEMPERATURE
-from core.pdf_processor import get_pdf_documents, get_text_chunks_from_documents
+from core.pdf_processor import get_pdf_documents, get_text_chunks_from_documents, validate_research_papers
 from core.image_processor import describe_images
 from core.vector_store import get_qdrant_vectorstore
 from core.rag_chain import get_context_retriever_chain, get_conversational_rag_chain
@@ -87,6 +87,12 @@ def _process_upload_job(job_id: str, pdf_files: list[tuple[str, bytes]]):
         docs = get_pdf_documents(pdf_files)
         if not docs:
             raise HTTPException(status_code=422, detail="No content extracted from PDFs")
+
+        non_research = validate_research_papers(docs)
+        if non_research:
+            names = ", ".join(non_research)
+            _set_upload_job(job_id, non_research_warnings=non_research)
+            logger.warning("Files may not be research papers: %s", names)
 
         _set_upload_job(
             job_id,
@@ -217,6 +223,7 @@ class UploadStatusResponse(BaseModel):
     documents_processed: int | None = None
     chunks_indexed: int | None = None
     error: str | None = None
+    non_research_warnings: list[str] | None = None
 
 
 @app.get("/api/health")
@@ -277,6 +284,7 @@ async def get_upload_status(job_id: str):
         documents_processed=job.get("documents_processed"),
         chunks_indexed=job.get("chunks_indexed"),
         error=job.get("error"),
+        non_research_warnings=job.get("non_research_warnings"),
     )
 
 
