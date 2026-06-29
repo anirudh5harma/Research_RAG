@@ -366,6 +366,9 @@ async def chat_stream(req: ChatRequest):
             session["chat_history"].append(HumanMessage(content=req.query))
             session["chat_history"].append(AIMessage(content=full_answer))
 
+            content_types = [doc.metadata.get("content_type", "text") for doc in context_docs]
+            logger.info("Stream context: %d docs, types: %s", len(context_docs), content_types)
+
             sources = []
             images = []
             image_cache = session.get("image_cache", {})

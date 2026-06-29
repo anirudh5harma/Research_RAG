@@ -47,14 +47,16 @@ class MultiPassRetriever(BaseRetriever):
             table_results = self.vectorstore.as_retriever(
                 search_kwargs={"k": 3, "filter": table_filter},
             ).invoke(query)
+            logger.info("Table-filtered search returned %d docs", len(table_results))
         except Exception as e:
-            logger.debug("Table-filtered search failed (may not have table docs): %s", e)
+            logger.warning("Table-filtered search failed: %s", e)
         try:
             image_results = self.vectorstore.as_retriever(
                 search_kwargs={"k": 2, "filter": image_filter},
             ).invoke(query)
+            logger.info("Image-filtered search returned %d docs", len(image_results))
         except Exception as e:
-            logger.debug("Image-filtered search failed (may not have image docs): %s", e)
+            logger.warning("Image-filtered search failed: %s", e)
 
         merged: list[Document] = []
         seen_page_content: set[str] = set()
