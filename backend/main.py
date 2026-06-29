@@ -4,8 +4,9 @@ import json
 import logging
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, UploadFile, File, HTTPException
+from fastapi import FastAPI, UploadFile, File, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
@@ -27,6 +28,29 @@ MAX_UPLOAD_SIZE = 50 * 1024 * 1024
 sessions: dict = {}
 
 
+def _normalise_origin(origin: str) -> str:
+    return origin.strip().rstrip("/")
+
+
+def _build_allowed_origins() -> list[str]:
+    configured = [
+        _normalise_origin(origin)
+        for origin in FRONTEND_URL.split(",")
+        if origin.strip()
+    ]
+    defaults = [
+        "http://localhost:3000",
+        "http://localhost:3001",
+        "https://frontend-omega-snowy-40.vercel.app",
+    ]
+
+    allowed: list[str] = []
+    for origin in [*configured, *defaults]:
+        if origin and origin not in allowed:
+            allowed.append(origin)
+    return allowed
+
+
 def _cleanup_expired_sessions():
     now = time.time()
     expired = [k for k, v in sessions.items() if now - v.get("created_at", 0) > SESSION_TTL]
@@ -39,6 +63,7 @@ def _cleanup_expired_sessions():
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info("%s v%s starting", APP_NAME, APP_VERSION)
+    logger.info("CORS allowed origins: %s", allowed_origins)
     yield
     sessions.clear()
     logger.info("Shutdown — sessions cleared")
@@ -46,20 +71,26 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title=APP_NAME, version=APP_VERSION, lifespan=lifespan)
 
-allowed_origins = [
-    FRONTEND_URL,
-    "http://localhost:3000",
-    "http://localhost:3001",
-]
+allowed_origins = _build_allowed_origins()
 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=allowed_origins,
     allow_origin_regex=r"https://.*\.vercel\.app",
     allow_credentials=True,
-    allow_methods=["*"],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allow_headers=["*"],
+    expose_headers=["*"],
 )
+
+
+@app.exception_handler(Exception)
+async def unhandled_exception_handler(request: Request, exc: Exception):
+    logger.exception("Unhandled error on %s %s", request.method, request.url.path)
+    return JSONResponse(
+        status_code=500,
+        content={"detail": "Internal server error"},
+    )
 
 
 class ChatRequest(BaseModel):
