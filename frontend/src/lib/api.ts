@@ -219,15 +219,23 @@ export async function sendMessageStream(
     if (done) break;
 
     buffer += decoder.decode(value, { stream: true });
-    const lines = buffer.split("\n");
-    buffer = lines.pop() || "";
+    const events = buffer.split("\n\n");
+    buffer = events.pop() || "";
 
-    let eventType = "";
-    for (const line of lines) {
-      if (line.startsWith("event: ")) {
-        eventType = line.slice(7).trim();
-      } else if (line.startsWith("data: ")) {
-        const data = JSON.parse(line.slice(6));
+    for (const event of events) {
+      const lines = event.split("\n");
+      let eventType = "";
+      let dataStr = "";
+      for (const line of lines) {
+        if (line.startsWith("event: ")) {
+          eventType = line.slice(7).trim();
+        } else if (line.startsWith("data: ")) {
+          dataStr += line.slice(6);
+        }
+      }
+      if (!eventType || !dataStr) continue;
+      try {
+        const data = JSON.parse(dataStr);
         switch (eventType) {
           case "token":
             callbacks.onToken(data.token);
@@ -242,7 +250,8 @@ export async function sendMessageStream(
             callbacks.onError(data.detail);
             break;
         }
-        eventType = "";
+      } catch {
+        // partial JSON, skip
       }
     }
   }
