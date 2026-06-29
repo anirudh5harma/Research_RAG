@@ -6,7 +6,7 @@ import qdrant_client
 from langchain_openai import OpenAIEmbeddings
 from langchain_qdrant import QdrantVectorStore
 from langchain_core.documents import Document
-from qdrant_client.http.models import VectorParams, Distance
+from qdrant_client.http.models import VectorParams, Distance, PayloadSchemaType
 
 from config.settings import OPENAI_API_KEY, QDRANT_HOST, QDRANT_API_KEY, EMBEDDING_MODEL
 
@@ -100,6 +100,7 @@ def _ensure_collection(
 ) -> bool:
     try:
         client.get_collection(collection_name=collection_name)
+        _ensure_payload_index(client, collection_name)
         return True
     except qdrant_client.http.exceptions.UnexpectedResponse:
         pass
@@ -111,10 +112,22 @@ def _ensure_collection(
             collection_name=collection_name,
             vectors_config=VectorParams(size=vector_size, distance=Distance.COSINE),
         )
+        _ensure_payload_index(client, collection_name)
         return True
     except Exception as e:
         logger.error("Failed to create collection '%s': %s", collection_name, e)
         return False
+
+
+def _ensure_payload_index(client: qdrant_client.QdrantClient, collection_name: str):
+    try:
+        client.create_payload_index(
+            collection_name=collection_name,
+            field_name="metadata.content_type",
+            field_schema=PayloadSchemaType.KEYWORD,
+        )
+    except Exception:
+        pass
 
 
 def _prepare_docs_for_indexing(docs: list[Document]) -> tuple[list[Document], dict]:

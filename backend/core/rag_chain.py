@@ -1,3 +1,4 @@
+import logging
 from typing import Any
 
 from langchain.chains import create_history_aware_retriever, create_retrieval_chain
@@ -10,6 +11,8 @@ from langchain_openai import ChatOpenAI
 from qdrant_client.models import FieldCondition, Filter, MatchValue
 
 from config.settings import AI_MODEL, LLM_TEMPERATURE
+
+logger = logging.getLogger(__name__)
 
 
 class MultiPassRetriever(BaseRetriever):
@@ -38,12 +41,20 @@ class MultiPassRetriever(BaseRetriever):
                 )
             ]
         )
-        table_results = self.vectorstore.as_retriever(
-            search_kwargs={"k": 3, "filter": table_filter},
-        ).invoke(query)
-        image_results = self.vectorstore.as_retriever(
-            search_kwargs={"k": 2, "filter": image_filter},
-        ).invoke(query)
+        table_results: list[Document] = []
+        image_results: list[Document] = []
+        try:
+            table_results = self.vectorstore.as_retriever(
+                search_kwargs={"k": 3, "filter": table_filter},
+            ).invoke(query)
+        except Exception as e:
+            logger.debug("Table-filtered search failed (may not have table docs): %s", e)
+        try:
+            image_results = self.vectorstore.as_retriever(
+                search_kwargs={"k": 2, "filter": image_filter},
+            ).invoke(query)
+        except Exception as e:
+            logger.debug("Image-filtered search failed (may not have image docs): %s", e)
 
         merged: list[Document] = []
         seen_page_content: set[str] = set()
