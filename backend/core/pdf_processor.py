@@ -7,7 +7,14 @@ import pandas as pd
 from typing import List
 from langchain_core.documents import Document
 from langchain.text_splitter import RecursiveCharacterTextSplitter
-from config.settings import CHUNK_SIZE, CHUNK_OVERLAP, MIN_IMAGE_DIMENSION
+from config.settings import (
+    CHUNK_SIZE,
+    CHUNK_OVERLAP,
+    MIN_IMAGE_DIMENSION,
+    ADVANCED_EXTRACTION_MAX_FILE_BYTES,
+    ADVANCED_EXTRACTION_MAX_PAGES,
+    MAX_IMAGES_PER_PDF,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -15,9 +22,23 @@ logger = logging.getLogger(__name__)
 def get_pdf_documents(pdf_files: list[tuple[str, bytes]]) -> List[Document]:
     documents: List[Document] = []
     for filename, pdf_bytes in pdf_files:
-        text_docs = _extract_text(io.BytesIO(pdf_bytes), filename)
-        table_docs = _extract_tables(pdf_bytes, filename)
-        image_docs = _extract_images(io.BytesIO(pdf_bytes), filename)
+        page_count = _get_page_count(pdf_bytes, filename)
+        text_docs = _extract_text(io.BytesIO(pdf_bytes), filename, page_count)
+
+        allow_advanced = _should_run_advanced_extraction(pdf_bytes, page_count)
+        table_docs: List[Document] = []
+        image_docs: List[Document] = []
+        if allow_advanced:
+            table_docs = _extract_tables(pdf_bytes, filename)
+            image_docs = _extract_images(io.BytesIO(pdf_bytes), filename)
+        else:
+            logger.warning(
+                "Skipping advanced extraction for %s (%d bytes, %d pages) to keep processing stable",
+                filename,
+                len(pdf_bytes),
+                page_count,
+            )
+
         documents.extend(text_docs)
         documents.extend(table_docs)
         documents.extend(image_docs)
@@ -26,9 +47,29 @@ def get_pdf_documents(pdf_files: list[tuple[str, bytes]]) -> List[Document]:
     return documents
 
 
-def _extract_text(pdf_stream: io.BytesIO, filename: str) -> List[Document]:
+def _get_page_count(pdf_bytes: bytes, filename: str) -> int:
+    try:
+        pdf = fitz.open(stream=io.BytesIO(pdf_bytes), filetype="pdf")
+        page_count = len(pdf)
+        pdf.close()
+        return page_count
+    except Exception as exc:
+        logger.warning("Could not determine page count for %s: %s", filename, exc)
+        return 0
+
+
+def _should_run_advanced_extraction(pdf_bytes: bytes, page_count: int) -> bool:
+    if len(pdf_bytes) > ADVANCED_EXTRACTION_MAX_FILE_BYTES:
+        return False
+    if page_count and page_count > ADVANCED_EXTRACTION_MAX_PAGES:
+        return False
+    return True
+
+
+def _extract_text(pdf_stream: io.BytesIO, filename: str, page_count: int = 0) -> List[Document]:
     pdf = fitz.open(stream=pdf_stream, filetype="pdf")
     documents: List[Document] = []
+    total_pages = page_count or len(pdf)
     for page_num, page in enumerate(pdf):
         text = page.get_text("text")
         if not text.strip():
@@ -39,7 +80,7 @@ def _extract_text(pdf_stream: io.BytesIO, filename: str) -> List[Document]:
                 "source": filename,
                 "page": page_num + 1,
                 "content_type": "text",
-                "total_pages": len(pdf),
+                "total_pages": total_pages,
             },
         ))
     return documents
@@ -194,6 +235,9 @@ def _extract_images(pdf_stream: io.BytesIO, filename: str) -> List[Document]:
             if w < MIN_IMAGE_DIMENSION or h < MIN_IMAGE_DIMENSION:
                 continue
             image_counter += 1
+            if image_counter > MAX_IMAGES_PER_PDF:
+                logger.warning("Reached image extraction cap for %s (%d images)", filename, MAX_IMAGES_PER_PDF)
+                return documents
             caption = _find_figure_caption(page_text, image_counter)
             content = f"[Figure {image_counter}"
             if caption:
