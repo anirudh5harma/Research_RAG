@@ -41,8 +41,19 @@ export interface ChatResponse {
 
 const POLL_INTERVAL_MS = 2000;
 const MAX_UPLOAD_WAIT_MS = 15 * 60 * 1000;
+const POLL_RETRY_DELAYS_MS = [1000, 2000, 4000];
+const MAX_CONSECUTIVE_POLL_FAILURES = 3;
 
 const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+async function readErrorDetail(res: Response): Promise<string> {
+  const err = await res.json().catch(() => ({ detail: res.statusText }));
+  return err.detail || "Request failed";
+}
+
+function shouldRetryStatus(status: number): boolean {
+  return status === 408 || status === 425 || status === 429 || status >= 500;
+}
 
 async function startUploadDocuments(files: File[]): Promise<UploadStartResponse> {
   const formData = new FormData();
@@ -54,22 +65,41 @@ async function startUploadDocuments(files: File[]): Promise<UploadStartResponse>
   });
 
   if (!res.ok) {
-    const err = await res.json().catch(() => ({ detail: res.statusText }));
-    throw new Error(err.detail || "Upload failed");
+    throw new Error(await readErrorDetail(res));
   }
 
   return res.json();
 }
 
 export async function getUploadStatus(jobId: string): Promise<UploadStatusResponse> {
-  const res = await fetch(`${API_URL}/api/upload/${jobId}`);
+  let lastError: Error | null = null;
 
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({ detail: res.statusText }));
-    throw new Error(err.detail || "Failed to fetch upload status");
+  for (let attempt = 0; attempt <= POLL_RETRY_DELAYS_MS.length; attempt++) {
+    try {
+      const res = await fetch(`${API_URL}/api/upload/${jobId}`, {
+        cache: "no-store",
+      });
+
+      if (!res.ok) {
+        const detail = await readErrorDetail(res);
+        if (shouldRetryStatus(res.status) && attempt < POLL_RETRY_DELAYS_MS.length) {
+          await wait(POLL_RETRY_DELAYS_MS[attempt]);
+          continue;
+        }
+        throw new Error(detail || "Failed to fetch upload status");
+      }
+
+      return res.json();
+    } catch (error) {
+      lastError = error instanceof Error ? error : new Error("Failed to fetch upload status");
+      if (attempt >= POLL_RETRY_DELAYS_MS.length) {
+        break;
+      }
+      await wait(POLL_RETRY_DELAYS_MS[attempt]);
+    }
   }
 
-  return res.json();
+  throw lastError || new Error("Failed to fetch upload status");
 }
 
 export async function uploadDocuments(
@@ -78,17 +108,37 @@ export async function uploadDocuments(
 ): Promise<UploadResponse> {
   const started = await startUploadDocuments(files);
   const beganAt = Date.now();
-
-  onStatus?.({
+  let consecutivePollFailures = 0;
+  let latestStatus: UploadStatusResponse = {
     job_id: started.job_id,
     status: started.status,
     message: started.message,
-  });
+  };
+
+  onStatus?.(latestStatus);
 
   while (Date.now() - beganAt < MAX_UPLOAD_WAIT_MS) {
     await wait(POLL_INTERVAL_MS);
-    const status = await getUploadStatus(started.job_id);
-    onStatus?.(status);
+    let status: UploadStatusResponse;
+
+    try {
+      status = await getUploadStatus(started.job_id);
+      consecutivePollFailures = 0;
+      latestStatus = status;
+      onStatus?.(status);
+    } catch (error) {
+      consecutivePollFailures += 1;
+
+      if (consecutivePollFailures >= MAX_CONSECUTIVE_POLL_FAILURES) {
+        throw error instanceof Error ? error : new Error("Failed to fetch upload status");
+      }
+
+      onStatus?.({
+        ...latestStatus,
+        message: "Connection hiccup while tracking upload. Retrying...",
+      });
+      continue;
+    }
 
     if (status.status === "completed") {
       if (!status.session_id || status.documents_processed == null || status.chunks_indexed == null) {
