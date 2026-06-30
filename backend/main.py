@@ -6,19 +6,11 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, UploadFile, File, HTTPException, Request, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
-from fastapi.responses import StreamingResponse
+from fastapi.responses import JSONResponse, Response, StreamingResponse
 from pydantic import BaseModel
 
 from config.settings import APP_NAME, APP_VERSION, FRONTEND_URL, AI_MODEL, LLM_TEMPERATURE
-from core.pdf_processor import get_pdf_documents, get_text_chunks_from_documents, validate_research_papers
-from core.image_processor import describe_images
-from core.vector_store import get_qdrant_vectorstore
-from core.rag_chain import get_context_retriever_chain, get_conversational_rag_chain
 from utils.helpers import generate_collection_name
-
-from langchain_core.messages import AIMessage, HumanMessage
-from langchain_openai import ChatOpenAI
 
 logger = logging.getLogger(__name__)
 
@@ -77,6 +69,20 @@ def _set_upload_job(job_id: str, **updates):
 
 
 def _process_upload_job(job_id: str, pdf_files: list[tuple[str, bytes]]):
+    # These modules pull in the PDF, data-science, and LangChain stacks. Loading
+    # them only for upload work keeps cold-start health checks lightweight.
+    from core.image_processor import describe_images
+    from core.pdf_processor import (
+        get_pdf_documents,
+        get_text_chunks_from_documents,
+        validate_research_papers,
+    )
+    from core.rag_chain import (
+        get_context_retriever_chain,
+        get_conversational_rag_chain,
+    )
+    from core.vector_store import get_qdrant_vectorstore
+
     started_at = time.time()
     try:
         _set_upload_job(
@@ -226,9 +232,14 @@ class UploadStatusResponse(BaseModel):
     non_research_warnings: list[str] | None = None
 
 
-@app.get("/api/health")
-async def health():
-    return {"status": "ok", "app": APP_NAME, "version": APP_VERSION}
+@app.api_route(
+    "/api/health",
+    methods=["GET", "HEAD"],
+    status_code=204,
+    response_class=Response,
+)
+async def health() -> Response:
+    return Response(status_code=204, headers={"Cache-Control": "no-store"})
 
 
 @app.post("/api/upload", response_model=UploadStartResponse, status_code=202)
@@ -290,6 +301,8 @@ async def get_upload_status(job_id: str):
 
 @app.post("/api/chat", response_model=ChatResponse)
 async def chat(req: ChatRequest):
+    from langchain_core.messages import AIMessage, HumanMessage
+
     session = sessions.get(req.session_id)
     if not session:
         raise HTTPException(status_code=404, detail="Session not found. Upload documents first.")
@@ -345,6 +358,8 @@ async def chat(req: ChatRequest):
 
 @app.post("/api/chat/stream")
 async def chat_stream(req: ChatRequest):
+    from langchain_core.messages import AIMessage, HumanMessage
+
     session = sessions.get(req.session_id)
     if not session:
         raise HTTPException(status_code=404, detail="Session not found. Upload documents first.")
@@ -420,6 +435,8 @@ async def chat_stream(req: ChatRequest):
 
 @app.post("/api/suggest-questions")
 async def suggest_questions(req: SuggestRequest):
+    from langchain_openai import ChatOpenAI
+
     session = sessions.get(req.session_id)
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")

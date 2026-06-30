@@ -5,6 +5,7 @@ services:
     dockerfilePath: ./backend/Dockerfile
     dockerContext: ./backend
     plan: starter
+    healthCheckPath: /api/health
     envVars:
       - key: OPENAI_API_KEY
         sync: false
